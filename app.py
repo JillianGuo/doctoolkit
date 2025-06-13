@@ -1,9 +1,7 @@
 import streamlit as st
-import fitz  # PyMuPDF
-from PIL import Image
 from io import BytesIO
 import os
-import zipfile
+from doc_processor import merge_docs, convert_image_to_pdf, split_pdf, create_zip_archive, rotate_pdf
 
 
 st.set_page_config(page_title="PDF Toolkit", layout="centered")
@@ -21,33 +19,20 @@ feature = st.sidebar.selectbox("Choose a Feature", [
 # ------------------------------
 # Feature 1: Merge PDFs
 # ------------------------------
-def merge_pdfs_ui():
-    st.subheader("🔗 Merge PDF Files")
+def merge_docs_ui():
+    st.subheader("🔗 Merge Documents (PDF and/or images)")
     uploaded_files = st.file_uploader(
-        "Upload PDF files", type="pdf", accept_multiple_files=True
+        "Upload PDF files and images", type=["pdf", "jpg", "jpeg", "png"], accept_multiple_files=True
     )
 
     client_name = st.text_input("Client Name (optional):").strip()
     default_filename = f"T1_Docs_{client_name}_2024.pdf" if client_name else "T1_Docs_2024.pdf"
     custom_filename = st.text_input("Output File Name:", value=default_filename)
 
-    if uploaded_files and len(uploaded_files) > 1:
+    if uploaded_files and len(uploaded_files) >= 1:
         if st.button("Merge PDFs"):
             try:
-                merged_doc = fitz.open()
-                toc = []
-                current_page = 0
-
-                for file in uploaded_files:
-                    pdf = fitz.open(stream=file.read(), filetype="pdf")
-                    merged_doc.insert_pdf(pdf)
-                    toc.append([1, file.name, current_page + 1, 0])  # TOC entry: level, title, page number
-                    current_page += pdf.page_count
-                    pdf.close()
-
-                merged_doc.set_toc(toc)
-                output_bytes = merged_doc.write()
-                merged_doc.close()
+                output_bytes = merge_docs(uploaded_files)
 
                 st.success("PDFs merged successfully!")
                 st.download_button(
@@ -60,7 +45,7 @@ def merge_pdfs_ui():
             except Exception as e:
                 st.error(f"Error: {e}")
     else:
-        st.info("Please upload at least two PDF files to merge.")
+        st.info("Please upload at least one PDF file or image to merge.")
 
 
 # ------------------------------
@@ -86,33 +71,7 @@ def convert_images_ui():
 
     if uploaded_image and st.button("Convert"):
         try:
-            img = Image.open(uploaded_image).convert("RGB")
-            width_px, height_px = img.size
-
-            # Convert to PNG bytes for PyMuPDF
-            img_buffer = BytesIO()
-            img.save(img_buffer, format="PNG")
-            img_buffer.seek(0)
-
-            # Create a Letter-size PDF
-            pdf = fitz.open()
-            page = pdf.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
-
-            # Scale image to fit while preserving aspect ratio
-            scale = min(PAGE_WIDTH / width_px, PAGE_HEIGHT / height_px)
-            draw_width = width_px * scale
-            draw_height = height_px * scale
-            x_offset = (PAGE_WIDTH - draw_width) / 2
-            y_offset = (PAGE_HEIGHT - draw_height) / 2
-            rect = fitz.Rect(x_offset, y_offset, x_offset + draw_width, y_offset + draw_height)
-
-            page.insert_image(rect, stream=img_buffer.getvalue())
-
-            # Output to buffer
-            buffer = BytesIO()
-            pdf.save(buffer)
-            buffer.seek(0)
-            pdf.close()
+            buffer = convert_image_to_pdf(uploaded_image)
 
             # Ensure output name ends with .pdf
             output_name = output_name_input if output_name_input.lower().endswith(".pdf") else f"{output_name_input}.pdf"
@@ -148,33 +107,16 @@ def split_pdf_ui():
 
     if uploaded_file and split_input and st.button("Split PDF"):
         try:
-            input_pdf = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-            split_results = []
-
+            # Parse split ranges
+            split_ranges = []
             for line in split_input.strip().splitlines():
                 if ':' not in line:
                     st.warning(f"Skipping malformed line: {line}")
                     continue
-
                 range_part, filename = map(str.strip, line.split(":", 1))
-
-                if '-' in range_part:
-                    start, end = map(int, range_part.split('-'))
-                else:
-                    start = int(range_part)
-                    end = start
-
-                split_doc = fitz.open()
-                split_doc.insert_pdf(input_pdf, from_page=start - 1, to_page=end - 1)
-
-                buffer = BytesIO()
-                split_doc.save(buffer)
-                buffer.seek(0)
-                split_doc.close()
-
-                split_results.append((filename, buffer))
-
-            input_pdf.close()
+                split_ranges.append((range_part, filename))
+            
+            split_results = split_pdf(uploaded_file, split_ranges)
             st.success("PDF split completed!")
 
             # ✅ Display list of output files
@@ -183,12 +125,7 @@ def split_pdf_ui():
                 st.markdown(f"📄 {filename}")
 
             # ✅ Create ZIP archive in memory
-            zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-                for filename, buffer in split_results:
-                    zipf.writestr(filename, buffer.read())
-
-            zip_buffer.seek(0)
+            zip_buffer = create_zip_archive(split_results)
 
             st.download_button(
                 label="⬇️ Download All as ZIP",
@@ -228,18 +165,8 @@ def rotate_pdf_ui():
 
     if uploaded_file and st.button("Rotate PDF"):
         try:
-            pdf = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-            rotated_pages = 0
-
-            for page in pdf:
-                angle = degrees if direction == "↻ Rotate Right" else -degrees
-                page.set_rotation((page.rotation + angle) % 360)
-                rotated_pages += 1
-
-            buffer = BytesIO()
-            pdf.save(buffer)
-            buffer.seek(0)
-            pdf.close()
+            direction_str = "right" if direction == "↻ Rotate Right" else "left"
+            buffer, rotated_pages = rotate_pdf(uploaded_file, degrees, direction_str)
 
             # Ensure .pdf extension
             output_name = custom_filename if custom_filename.lower().endswith(".pdf") else f"{custom_filename}.pdf"
@@ -262,7 +189,7 @@ def rotate_pdf_ui():
 # Run selected feature
 # ------------------------------
 if feature == "Merge PDFs":
-    merge_pdfs_ui()
+    merge_docs_ui()
 elif feature == "Convert Image to PDF":
     convert_images_ui()
 elif feature == "Split PDF":

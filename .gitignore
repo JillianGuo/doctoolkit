@@ -42,3 +42,8 @@ build/
 # SSL certificates
 *.pem
 /certs
+
+# Claude AI
+.claude/
+claude_api_key.txt
+CLAUDE.md
