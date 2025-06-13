@@ -31,7 +31,7 @@ def merge_docs(uploaded_files):
             # Handle PDF files
             pdf = fitz.open(stream=file.read(), filetype="pdf")
             merged_doc.insert_pdf(pdf)
-            toc.append([1, file.name, current_page + 1, 0])  # TOC entry: level, title, page number
+            toc.append([1, file.name.rsplit('.', 1)[0], current_page + 1, 0])  # TOC entry: level, title, page number
             current_page += pdf.page_count
             pdf.close()
         elif file_extension in ['jpg', 'jpeg', 'png']:
@@ -83,7 +83,7 @@ def merge_docs(uploaded_files):
             # Insert image with high quality settings
             page.insert_image(rect, stream=img_buffer.getvalue(), keep_proportion=True)
             
-            toc.append([1, file.name, current_page + 1, 0])  # TOC entry: level, title, page number
+            toc.append([1, file.name.rsplit('.', 1)[0], current_page + 1, 0])  # TOC entry: level, title, page number
             current_page += 1
 
     merged_doc.set_toc(toc)
